@@ -79,12 +79,12 @@ func create(ctx *context.Context, format, folder, arch string, builds context.Bu
 	for _, build := range builds {
 		// This basically tells fpm to put the binary in the bindir, e.g. /usr/local/bin
 		// binary=/usr/local/bin/binary
-		log.WithField("path", build.Path).
+		log.WithField("path", build.Path()).
 			WithField("name", build.Name).
 			Debug("added binary to fpm package")
 		options = append(options, fmt.Sprintf(
 			"%s=%s",
-			build.Name,
+			filepath.Join(ctx.Config.Dist, build.Path()),
 			filepath.Join(ctx.Config.FPM.Bindir, build.Name),
 		))
 	}
