@@ -8,8 +8,8 @@ package context
 
 import (
 	ctx "context"
+	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -23,11 +23,6 @@ type GitInfo struct {
 	Commit     string
 }
 
-// Binary with pretty name and path
-type Binary struct {
-	Name, Path string
-}
-
 // Context carries along some data through the pipes
 type Context struct {
 	ctx.Context
@@ -35,9 +30,6 @@ type Context struct {
 	Env          map[string]string
 	Token        string
 	Git          GitInfo
-	Binaries     map[string]map[string][]Binary
-	Artifacts    []string
-	Dockers      []string
 	ReleaseNotes string
 	Version      string
 	Validate     bool
@@ -46,53 +38,69 @@ type Context struct {
 	RmDist       bool
 	Debug        bool
 	Parallelism  int
+
+	buildsLock sync.Mutex
+	Builds     Builds
+
+	artifactsLock sync.Mutex
+	Artifacts     Artifacts
 }
 
-var (
-	artifactsLock sync.Mutex
-	dockersLock   sync.Mutex
-	binariesLock  sync.Mutex
+func (builds Builds) GroupedByFolder() map[string]Builds {
+	var result map[string]Builds
+	for _, build := range builds {
+		if result[build.Folder] == nil {
+			result[build.Folder] = Builds{}
+		}
+		result[build.Folder] = append(result[build.Folder], build)
+	}
+	return result
+}
+
+type Build struct {
+	Name   string
+	Folder string
+	Goos   string
+	Goarch string
+	Goarm  string
+}
+
+type Builds []Build
+
+type ArtifactType int
+
+const (
+	Uploadable ArtifactType = iota
+	DockerImage
+	Checksum
 )
 
-// AddArtifact adds a file to upload list
-func (ctx *Context) AddArtifact(file string) {
-	artifactsLock.Lock()
-	defer artifactsLock.Unlock()
-	file = strings.TrimPrefix(file, ctx.Config.Dist+string(filepath.Separator))
-	ctx.Artifacts = append(ctx.Artifacts, file)
-	log.WithField("artifact", file).Info("new release artifact")
+type Artifact struct {
+	Name string
+	Path string
+	Type ArtifactType
 }
 
-// AddDocker adds a docker image to the docker images list
-func (ctx *Context) AddDocker(image string) {
-	dockersLock.Lock()
-	defer dockersLock.Unlock()
-	ctx.Dockers = append(ctx.Dockers, image)
-	log.WithField("image", image).Info("new docker image")
+func (a Artifact) String() string {
+	return fmt.Sprintf("[%v] %s (%s)", a.Type, a.Name, a.Path)
+}
+
+type Artifacts []Artifact
+
+// AddArtifact adds a file to upload list
+func (ctx *Context) AddArtifact(artifact Artifact) {
+	ctx.artifactsLock.Lock()
+	defer ctx.artifactsLock.Unlock()
+	ctx.Artifacts = append(ctx.Artifacts, artifact)
+	log.WithField("artifact", artifact).Info("new release artifact")
 }
 
 // AddBinary adds a built binary to the current context
-func (ctx *Context) AddBinary(platform, folder, name, path string) {
-	binariesLock.Lock()
-	defer binariesLock.Unlock()
-	if ctx.Binaries == nil {
-		ctx.Binaries = map[string]map[string][]Binary{}
-	}
-	if ctx.Binaries[platform] == nil {
-		ctx.Binaries[platform] = map[string][]Binary{}
-	}
-	ctx.Binaries[platform][folder] = append(
-		ctx.Binaries[platform][folder],
-		Binary{
-			Name: name,
-			Path: path,
-		},
-	)
-	log.WithField("platform", platform).
-		WithField("folder", folder).
-		WithField("name", name).
-		WithField("path", path).
-		Debug("new binary")
+func (ctx *Context) AddBuild(build Build) {
+	ctx.buildsLock.Lock()
+	defer ctx.buildsLock.Unlock()
+	ctx.Builds = append(ctx.Builds, build)
+	log.WithField("build", build).Debug("new binary")
 }
 
 // New context

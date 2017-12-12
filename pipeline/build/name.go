@@ -8,6 +8,10 @@ import (
 	"github.com/goreleaser/goreleaser/internal/buildtarget"
 )
 
+func RemoveThisMethod(ctx *context.Context, target buildtarget.Target, name string) (string, error) {
+	return nameFor(ctx, target, name)
+}
+
 func nameFor(ctx *context.Context, target buildtarget.Target, name string) (string, error) {
 	var out bytes.Buffer
 	t, err := template.New(name).Parse(ctx.Config.Archive.NameTemplate)

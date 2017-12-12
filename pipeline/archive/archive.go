@@ -23,22 +23,6 @@ func (Pipe) String() string {
 	return "creating archives"
 }
 
-// Run the pipe
-func (Pipe) Run(ctx *context.Context) error {
-	var g errgroup.Group
-	for platform, binaries := range ctx.Binaries {
-		platform := platform
-		binaries := binaries
-		g.Go(func() error {
-			if ctx.Config.Archive.Format == "binary" {
-				return skip(ctx, platform, binaries)
-			}
-			return create(ctx, platform, binaries)
-		})
-	}
-	return g.Wait()
-}
-
 // Default sets the pipe defaults
 func (Pipe) Default(ctx *context.Context) error {
 	if ctx.Config.Archive.NameTemplate == "" {
@@ -62,52 +46,75 @@ func (Pipe) Default(ctx *context.Context) error {
 	return nil
 }
 
-func create(ctx *context.Context, platform string, groups map[string][]context.Binary) error {
-	for folder, binaries := range groups {
-		var format = archiveformat.For(ctx, platform)
-		archivePath := filepath.Join(ctx.Config.Dist, folder+"."+format)
-		archiveFile, err := os.Create(archivePath)
-		if err != nil {
-			return fmt.Errorf("failed to create directory %s: %s", archivePath, err.Error())
-		}
-		defer func() {
-			if e := archiveFile.Close(); e != nil {
-				log.WithField("archive", archivePath).Errorf("failed to close file: %v", e)
+// Run the pipe
+func (Pipe) Run(ctx *context.Context) error {
+	var g errgroup.Group
+	for folder, builds := range ctx.Builds.GroupedByFolder() {
+		folder := folder
+		builds := builds
+		g.Go(func() error {
+			if ctx.Config.Archive.Format == "binary" {
+				return skip(ctx, folder, builds)
 			}
-		}()
-		log.WithField("archive", archivePath).Info("creating")
-		var a = archive.New(archiveFile)
-		defer func() {
-			if e := a.Close(); e != nil {
-				log.WithField("archive", archivePath).Errorf("failed to close archive: %v", e)
-			}
-		}()
-
-		files, err := findFiles(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to find files to archive: %s", err.Error())
-		}
-		for _, f := range files {
-			if err = a.Add(wrap(ctx, f, folder), f); err != nil {
-				return fmt.Errorf("failed to add %s to the archive: %s", f, err.Error())
-			}
-		}
-		for _, binary := range binaries {
-			if err := a.Add(wrap(ctx, binary.Name, folder), binary.Path); err != nil {
-				return fmt.Errorf("failed to add %s -> %s to the archive: %s", binary.Path, binary.Name, err.Error())
-			}
-		}
-		ctx.AddArtifact(archivePath)
+			return create(ctx, folder, builds)
+		})
 	}
+	return g.Wait()
+}
+
+func create(ctx *context.Context, folder string, builds context.Builds) error {
+	// TODO: in theory if grouped by folder they are all the same goos, right?
+	var format = archiveformat.For(ctx, builds[0].Goos)
+	archivePath := filepath.Join(ctx.Config.Dist, folder+"."+format)
+	archiveFile, err := os.Create(archivePath)
+	if err != nil {
+		return fmt.Errorf("failed to create directory %s: %s", archivePath, err.Error())
+	}
+	defer func() {
+		if e := archiveFile.Close(); e != nil {
+			log.WithField("archive", archivePath).Errorf("failed to close file: %v", e)
+		}
+	}()
+	log.WithField("archive", archivePath).Info("creating")
+	var a = archive.New(archiveFile)
+	defer func() {
+		if e := a.Close(); e != nil {
+			log.WithField("archive", archivePath).Errorf("failed to close archive: %v", e)
+		}
+	}()
+
+	files, err := findFiles(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to find files to archive: %s", err.Error())
+	}
+	for _, f := range files {
+		if err = a.Add(wrap(ctx, f, folder), f); err != nil {
+			return fmt.Errorf("failed to add %s to the archive: %s", f, err.Error())
+		}
+	}
+	for _, build := range builds {
+		var path = filepath.Join(ctx.Config.Dist, folder, build.Name)
+		if err := a.Add(wrap(ctx, build.Name, folder), path); err != nil {
+			return fmt.Errorf("failed to add %s -> %s to the archive: %s", path, build.Name, err.Error())
+		}
+	}
+	ctx.AddArtifact(context.Artifact{
+		Name: folder + "." + format,
+		Path: archivePath,
+		Type: context.Uploadable,
+	})
 	return nil
 }
 
-func skip(ctx *context.Context, platform string, groups map[string][]context.Binary) error {
-	for _, binaries := range groups {
-		for _, binary := range binaries {
-			log.WithField("binary", binary.Name).Info("skip archiving")
-			ctx.AddArtifact(binary.Path)
-		}
+func skip(ctx *context.Context, folder string, builds context.Builds) error {
+	for _, build := range builds {
+		log.WithField("binary", build.Name).Info("skip archiving")
+		var path = filepath.Join(ctx.Config.Dist, folder, build.Name)
+		ctx.AddArtifact(context.Artifact{
+			Name: folder + "." + format,
+			Path: path,
+			Type: context.Uploadable,
+		})
 	}
 	return nil
 }
