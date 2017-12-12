@@ -20,15 +20,6 @@ func (Pipe) String() string {
 	return "releasing to GitHub"
 }
 
-// Run the pipe
-func (Pipe) Run(ctx *context.Context) error {
-	c, err := client.NewGitHub(ctx)
-	if err != nil {
-		return err
-	}
-	return doRun(ctx, c)
-}
-
 // Default sets the pipe defaults
 func (Pipe) Default(ctx *context.Context) error {
 	if ctx.Config.Release.NameTemplate == "" {
@@ -43,6 +34,15 @@ func (Pipe) Default(ctx *context.Context) error {
 	}
 	ctx.Config.Release.GitHub = repo
 	return nil
+}
+
+// Run the pipe
+func (Pipe) Run(ctx *context.Context) error {
+	c, err := client.NewGitHub(ctx)
+	if err != nil {
+		return err
+	}
+	return doRun(ctx, c)
 }
 
 func doRun(ctx *context.Context, c client.Client) error {
@@ -66,6 +66,9 @@ func doRun(ctx *context.Context, c client.Client) error {
 		sem <- true
 		artifact := artifact
 		g.Go(func() error {
+			if !artifact.IsUploadable() {
+				return nil
+			}
 			defer func() {
 				<-sem
 			}()
@@ -75,14 +78,16 @@ func doRun(ctx *context.Context, c client.Client) error {
 	return g.Wait()
 }
 
-func upload(ctx *context.Context, c client.Client, releaseID int, artifact string) error {
-	var path = filepath.Join(ctx.Config.Dist, artifact)
+func upload(ctx *context.Context, c client.Client, releaseID int, artifact context.Artifact) error {
+	var path = filepath.Join(ctx.Config.Dist, artifact.Path)
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = file.Close() }()
-	_, name := filepath.Split(path)
-	log.WithField("file", file.Name()).WithField("name", name).Info("uploading to release")
-	return c.Upload(ctx, releaseID, name, file)
+	log.WithFields(log.Fields{
+		"file": file.Name(),
+		"name": artifact.Name,
+	}).Info("uploading to release")
+	return c.Upload(ctx, releaseID, artifact.Name, file)
 }

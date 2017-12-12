@@ -14,7 +14,7 @@ const bodyTemplate = `{{ .ReleaseNotes }}
 
 ## Docker images
 {{ range $element := .DockerImages }}
-- ` + "`docker pull {{ . -}}`" + `
+- ` + "`docker pull {{ .Name -}}`" + `
 {{- end -}}
 {{- end }}
 
@@ -36,11 +36,11 @@ func describeBodyVersion(ctx *context.Context, version string) (bytes.Buffer, er
 	var template = template.Must(template.New("release").Parse(bodyTemplate))
 	err := template.Execute(&out, struct {
 		ReleaseNotes, GoVersion string
-		DockerImages            []string
+		DockerImages            context.Artifacts
 	}{
 		ReleaseNotes: ctx.ReleaseNotes,
 		GoVersion:    version,
-		DockerImages: ctx.Dockers,
+		DockerImages: ctx.Artifacts.ByType(context.DockerImage),
 	})
 	return out, err
 }

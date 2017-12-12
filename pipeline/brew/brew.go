@@ -21,7 +21,9 @@ import (
 
 // ErrNoDarwin64Build when there is no build for darwin_amd64 (goos doesn't
 // contain darwin and/or goarch doesn't contain amd64)
-var ErrNoDarwin64Build = errors.New("brew tap requires a darwin amd64 build")
+var ErrNoDarwin64Build = errors.New("brew tap requires at least one darwin amd64 build")
+
+var ErrTooManyDarwinBuilds = errors.New("brew tap requires at most one darwin amd64 build")
 
 const platform = "darwinamd64"
 
@@ -98,20 +100,19 @@ func doRun(ctx *context.Context, client client.Client) error {
 		return pipeline.Skip("archive format is binary")
 	}
 
-	var group = ctx.Binaries["darwinamd64"]
-	if group == nil {
+	var artifacts = ctx.Artifacts.ByGoos("darwin").ByGoarch("amd64")
+	if len(artifacts) == 0 {
 		return ErrNoDarwin64Build
 	}
-	var folder string
-	for f := range group {
-		folder = f
-		break
+	if len(artifacts) > 1 {
+		return ErrTooManyDarwinBuilds
 	}
+	var artifact = artifacts[0]
 	var path = filepath.Join(ctx.Config.Brew.Folder, ctx.Config.ProjectName+".rb")
 	log.WithField("formula", path).
 		WithField("repo", ctx.Config.Brew.GitHub.String()).
 		Info("pushing")
-	content, err := buildFormula(ctx, client, folder)
+	content, err := buildFormula(ctx, client, artifact.Path)
 	if err != nil {
 		return err
 	}

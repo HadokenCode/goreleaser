@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/apex/log"
 	"github.com/goreleaser/archive"
 	"github.com/goreleaser/goreleaser/context"
 	"github.com/goreleaser/goreleaser/internal/archiveformat"
+	"github.com/goreleaser/goreleaser/internal/ext"
 	"github.com/mattn/go-zglob"
 	"golang.org/x/sync/errgroup"
 )
@@ -63,9 +65,12 @@ func (Pipe) Run(ctx *context.Context) error {
 }
 
 func create(ctx *context.Context, folder string, builds context.Builds) error {
-	// TODO: in theory if grouped by folder they are all the same goos, right?
 	var format = archiveformat.For(ctx, builds[0].Goos)
-	archivePath := filepath.Join(ctx.Config.Dist, folder+"."+format)
+	archiveName, err := nameFor(ctx, builds[0], ctx.Config.ProjectName)
+	if err != nil {
+		return err
+	}
+	archivePath := filepath.Join(ctx.Config.Dist, archiveName+"."+format)
 	archiveFile, err := os.Create(archivePath)
 	if err != nil {
 		return fmt.Errorf("failed to create directory %s: %s", archivePath, err.Error())
@@ -93,27 +98,39 @@ func create(ctx *context.Context, folder string, builds context.Builds) error {
 		}
 	}
 	for _, build := range builds {
-		var path = filepath.Join(ctx.Config.Dist, folder, build.Name)
+		var path = filepath.Join(ctx.Config.Dist, build.Path())
 		if err := a.Add(wrap(ctx, build.Name, folder), path); err != nil {
 			return fmt.Errorf("failed to add %s -> %s to the archive: %s", path, build.Name, err.Error())
 		}
 	}
 	ctx.AddArtifact(context.Artifact{
-		Name: folder + "." + format,
-		Path: archivePath,
-		Type: context.Uploadable,
+		Name:   folder + "." + format,
+		Path:   archivePath,
+		Type:   context.Uploadable,
+		Goos:   builds[0].Goos,
+		Goarch: builds[0].Goarch,
+		Goarm:  builds[0].Goarm,
 	})
 	return nil
 }
 
 func skip(ctx *context.Context, folder string, builds context.Builds) error {
 	for _, build := range builds {
-		log.WithField("binary", build.Name).Info("skip archiving")
-		var path = filepath.Join(ctx.Config.Dist, folder, build.Name)
+		var path = filepath.Join(ctx.Config.Dist, build.Path())
+		// TODO: maybe the ext should only be added here?
+		name, err := nameFor(ctx, build, strings.TrimSuffix(build.Name, ".exe"))
+		if err != nil {
+			return err
+		}
+		name = name + ext.ForOS(build.Goos)
+		log.WithField("binary", name).Info("skip archiving")
 		ctx.AddArtifact(context.Artifact{
-			Name: folder + "." + format,
-			Path: path,
-			Type: context.Uploadable,
+			Name:   name,
+			Path:   path,
+			Type:   context.Uploadable,
+			Goos:   build.Goos,
+			Goarch: build.Goarch,
+			Goarm:  build.Goarm,
 		})
 	}
 	return nil

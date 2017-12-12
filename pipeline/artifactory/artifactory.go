@@ -16,7 +16,6 @@ import (
 
 	"github.com/goreleaser/goreleaser/config"
 	"github.com/goreleaser/goreleaser/context"
-	"github.com/goreleaser/goreleaser/internal/buildtarget"
 	"github.com/goreleaser/goreleaser/pipeline"
 
 	"github.com/apex/log"
@@ -69,7 +68,7 @@ func (Pipe) Default(ctx *context.Context) error {
 	// Check if a mode was set
 	for i := range ctx.Config.Artifactories {
 		if ctx.Config.Artifactories[i].Mode == "" {
-			ctx.Config.Artifactories[i].Mode = "archive"
+			ctx.Config.Artifactories[i].Mode = modeArchive
 		}
 	}
 
@@ -124,12 +123,7 @@ func doRun(ctx *context.Context) error {
 			err = runPipeForModeArchive(ctx, instance)
 
 		case modeBinary:
-			// Loop over all builds, because we want to publish every build to Artifactory
-			for _, build := range ctx.Config.Builds {
-				if err = runPipeForModeBinary(ctx, instance, build); err != nil {
-					return err
-				}
-			}
+			err = runPipeForModeBinary(ctx, instance, ctx.Builds)
 
 		default:
 			err = fmt.Errorf("artifactory: mode \"%s\" not supported", v)
@@ -157,10 +151,12 @@ func runPipeForModeArchive(ctx *context.Context, instance config.Artifactory) er
 		sem <- true
 		artifact := artifact
 		g.Go(func() error {
+			if !artifact.IsUploadable() {
+				return nil
+			}
 			defer func() {
 				<-sem
 			}()
-
 			return uploadArchive(ctx, instance, artifact)
 		})
 	}
@@ -169,33 +165,33 @@ func runPipeForModeArchive(ctx *context.Context, instance config.Artifactory) er
 }
 
 // uploadArchive will upload artifact in mode archive
-func uploadArchive(ctx *context.Context, instance config.Artifactory, artifact string) error {
-	var path = filepath.Join(ctx.Config.Dist, artifact)
-	return uploadAssetAndLog(ctx, instance, path, nil)
-}
-
-// uploadBinary will upload the current build and the current target in mode binary
-func uploadBinary(ctx *context.Context, instance config.Artifactory, build config.Build, target buildtarget.Target) error {
-	binary, err := getBinaryForUploadPerBuild(ctx, target)
-	if err != nil {
-		return err
-	}
-
-	return uploadAssetAndLog(ctx, instance, binary.Path, &target)
-}
-
-// uploadAssetAndLog uploads file to target and logs all actions
-func uploadAssetAndLog(ctx *context.Context, instance config.Artifactory, path string, target *buildtarget.Target) error {
-	envName := fmt.Sprintf("ARTIFACTORY_%s_SECRET", strings.ToUpper(instance.Name))
-	secret := ctx.Env[envName]
-
-	// Generate the target url
-	targetURL, err := resolveTargetTemplate(ctx, instance, target)
+func uploadArchive(ctx *context.Context, instance config.Artifactory, artifact context.Artifact) error {
+	var path = filepath.Join(ctx.Config.Dist, artifact.Path)
+	targetURL, err := resolveArchiveTemplate(ctx, instance)
 	if err != nil {
 		msg := "artifactory: error while building the target url"
 		log.WithField("instance", instance.Name).WithError(err).Error(msg)
 		return errors.Wrap(err, msg)
 	}
+	return uploadAssetAndLog(ctx, instance, targetURL, artifact.Name, path)
+}
+
+// uploadBinary will upload the current build and the current target in mode binary
+func uploadBinary(ctx *context.Context, instance config.Artifactory, build context.Build) error {
+	// Generate the target url
+	targetURL, err := resolveBinaryTemplate(ctx, instance, build)
+	if err != nil {
+		msg := "artifactory: error while building the target url"
+		log.WithField("instance", instance.Name).WithError(err).Error(msg)
+		return errors.Wrap(err, msg)
+	}
+	return uploadAssetAndLog(ctx, instance, targetURL, build.Name, build.Path())
+}
+
+// uploadAssetAndLog uploads file to target and logs all actions
+func uploadAssetAndLog(ctx *context.Context, instance config.Artifactory, targetURL, name, path string) error {
+	envName := fmt.Sprintf("ARTIFACTORY_%s_SECRET", strings.ToUpper(instance.Name))
+	secret := ctx.Env[envName]
 
 	// Handle the artifact
 	file, err := os.Open(path)
@@ -203,7 +199,6 @@ func uploadAssetAndLog(ctx *context.Context, instance config.Artifactory, path s
 		return err
 	}
 	defer file.Close() // nolint: errcheck
-	_, name := filepath.Split(path)
 
 	// The target url needs to contain the artifact name
 	if !strings.HasSuffix(targetURL, "/") {
@@ -231,45 +226,25 @@ func uploadAssetAndLog(ctx *context.Context, instance config.Artifactory, path s
 }
 
 // runPipeForModeBinary uploads all configured builds to instance
-func runPipeForModeBinary(ctx *context.Context, instance config.Artifactory, build config.Build) error {
+func runPipeForModeBinary(ctx *context.Context, instance config.Artifactory, builds context.Builds) error {
 	sem := make(chan bool, ctx.Parallelism)
 	var g errgroup.Group
 
 	// Lets generate the build matrix, because we want
 	// to publish every target to Artifactory
-	for _, target := range buildtarget.All(build) {
+	for _, build := range builds {
 		sem <- true
-		target := target
 		build := build
 		g.Go(func() error {
 			defer func() {
 				<-sem
 			}()
 
-			return uploadBinary(ctx, instance, build, target)
+			return uploadBinary(ctx, instance, build)
 		})
 	}
 
 	return g.Wait()
-}
-
-// getBinaryForUploadPerBuild determines the correct binary for the upload
-func getBinaryForUploadPerBuild(ctx *context.Context, target buildtarget.Target) (*context.Binary, error) {
-	var group = ctx.Binaries[target.String()]
-	if group == nil {
-		return nil, fmt.Errorf("binary for build target %s not found", target.String())
-	}
-
-	var binary context.Binary
-	for _, binaries := range group {
-		for _, b := range binaries {
-			binary = b
-			break
-		}
-		break
-	}
-
-	return &binary, nil
 }
 
 // targetData is used as a template struct for
@@ -285,20 +260,32 @@ type targetData struct {
 	Arm  string
 }
 
-// resolveTargetTemplate returns the resolved target template with replaced variables
+// resolveBinaryTemplate returns the resolved target template with replaced variables
 // Those variables can be replaced by the given context, goos, goarch, goarm and more
-func resolveTargetTemplate(ctx *context.Context, artifactory config.Artifactory, target *buildtarget.Target) (string, error) {
+func resolveBinaryTemplate(ctx *context.Context, artifactory config.Artifactory, build context.Build) (string, error) {
 	data := targetData{
 		Version:     ctx.Version,
 		Tag:         ctx.Git.CurrentTag,
 		ProjectName: ctx.Config.ProjectName,
+		Os:          replace(ctx.Config.Archive.Replacements, build.Goos),
+		Arch:        replace(ctx.Config.Archive.Replacements, build.Goarch),
+		Arm:         replace(ctx.Config.Archive.Replacements, build.Goarm),
 	}
 
-	// Only supported in mode binary
-	if target != nil {
-		data.Os = replace(ctx.Config.Archive.Replacements, target.OS)
-		data.Arch = replace(ctx.Config.Archive.Replacements, target.Arch)
-		data.Arm = replace(ctx.Config.Archive.Replacements, target.Arm)
+	var out bytes.Buffer
+	t, err := template.New(ctx.Config.ProjectName).Parse(artifactory.Target)
+	if err != nil {
+		return "", err
+	}
+	err = t.Execute(&out, data)
+	return out.String(), err
+}
+
+func resolveArchiveTemplate(ctx *context.Context, artifactory config.Artifactory) (string, error) {
+	data := targetData{
+		Version:     ctx.Version,
+		Tag:         ctx.Git.CurrentTag,
+		ProjectName: ctx.Config.ProjectName,
 	}
 
 	var out bytes.Buffer

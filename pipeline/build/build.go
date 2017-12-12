@@ -105,12 +105,7 @@ func runHook(env []string, hook string) error {
 
 func doBuild(ctx *context.Context, build config.Build, target buildtarget.Target) error {
 	var binaryName = build.Binary + ext.For(target)
-	// TODO: this is wrong
-	// build doesnt need to know the name of the folder!!
-	folder, err := nameFor(ctx, target, ctx.Config.ProjectName)
-	if err != nil {
-		return err
-	}
+	var folder = ctx.Config.ProjectName + "_" + target.String()
 	ctx.AddBuild(context.Build{
 		Goarch: target.Arch,
 		Goos:   target.OS,

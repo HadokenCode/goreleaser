@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/apex/log"
 	"github.com/goreleaser/goreleaser/context"
@@ -50,31 +49,25 @@ func doRun(ctx *context.Context) error {
 	var g errgroup.Group
 	sem := make(chan bool, ctx.Parallelism)
 	for _, format := range ctx.Config.FPM.Formats {
-		for platform, groups := range ctx.Binaries {
-			if !strings.Contains(platform, "linux") {
-				log.WithField("platform", platform).Debug("skipped non-linux builds for fpm")
-				continue
-			}
+		for folder, builds := range ctx.Builds.ByGoos("linux").GroupedByFolder() {
 			sem <- true
 			format := format
-			arch := linux.Arch(platform)
-			for folder, binaries := range groups {
-				g.Go(func() error {
-					defer func() {
-						<-sem
-					}()
-					return create(ctx, format, folder, arch, binaries)
-				})
-			}
+			arch := linux.Arch(folder)
+			g.Go(func() error {
+				defer func() {
+					<-sem
+				}()
+				return create(ctx, format, folder, arch, builds)
+			})
 		}
 	}
 	return g.Wait()
 }
 
-func create(ctx *context.Context, format, folder, arch string, binaries []context.Binary) error {
+func create(ctx *context.Context, format, folder, arch string, builds context.Builds) error {
 	var path = filepath.Join(ctx.Config.Dist, folder)
 	var file = path + "." + format
-	var log = log.WithField("format", format).WithField("arch", arch)
+	var log = log.WithFields(log.Fields{"format": format, "arch": arch})
 	dir, err := ioutil.TempDir("", "fpm")
 	if err != nil {
 		return err
@@ -82,16 +75,17 @@ func create(ctx *context.Context, format, folder, arch string, binaries []contex
 	log.WithField("file", file).WithField("workdir", dir).Info("creating fpm archive")
 	var options = basicOptions(ctx, dir, format, arch, file)
 
-	for _, binary := range binaries {
+	// TODO: this is probably wrong
+	for _, build := range builds {
 		// This basically tells fpm to put the binary in the bindir, e.g. /usr/local/bin
 		// binary=/usr/local/bin/binary
-		log.WithField("path", binary.Path).
-			WithField("name", binary.Name).
+		log.WithField("path", build.Path).
+			WithField("name", build.Name).
 			Debug("added binary to fpm package")
 		options = append(options, fmt.Sprintf(
 			"%s=%s",
-			binary.Path,
-			filepath.Join(ctx.Config.FPM.Bindir, binary.Name),
+			build.Name,
+			filepath.Join(ctx.Config.FPM.Bindir, build.Name),
 		))
 	}
 
@@ -111,7 +105,11 @@ func create(ctx *context.Context, format, folder, arch string, binaries []contex
 	if out, err := exec.Command("fpm", options...).CombinedOutput(); err != nil {
 		return errors.Wrap(err, string(out))
 	}
-	ctx.AddArtifact(file)
+	ctx.AddArtifact(context.Artifact{
+		Type: context.Uploadable,
+		Name: filepath.Base(file),
+		Path: file,
+	})
 	return nil
 }
 

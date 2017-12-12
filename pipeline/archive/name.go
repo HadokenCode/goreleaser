@@ -1,18 +1,13 @@
-package build
+package archive
 
 import (
 	"bytes"
 	"text/template"
 
 	"github.com/goreleaser/goreleaser/context"
-	"github.com/goreleaser/goreleaser/internal/buildtarget"
 )
 
-func RemoveThisMethod(ctx *context.Context, target buildtarget.Target, name string) (string, error) {
-	return nameFor(ctx, target, name)
-}
-
-func nameFor(ctx *context.Context, target buildtarget.Target, name string) (string, error) {
+func nameFor(ctx *context.Context, build context.Build, name string) (string, error) {
 	var out bytes.Buffer
 	t, err := template.New(name).Parse(ctx.Config.Archive.NameTemplate)
 	if err != nil {
@@ -22,9 +17,9 @@ func nameFor(ctx *context.Context, target buildtarget.Target, name string) (stri
 		Os, Arch, Arm, Version, Tag, Binary, ProjectName string
 		Env                                              map[string]string
 	}{
-		Os:          replace(ctx.Config.Archive.Replacements, target.OS),
-		Arch:        replace(ctx.Config.Archive.Replacements, target.Arch),
-		Arm:         replace(ctx.Config.Archive.Replacements, target.Arm),
+		Os:          replace(ctx.Config.Archive.Replacements, build.Goos),
+		Arch:        replace(ctx.Config.Archive.Replacements, build.Goarch),
+		Arm:         replace(ctx.Config.Archive.Replacements, build.Goarm),
 		Version:     ctx.Version,
 		Tag:         ctx.Git.CurrentTag,
 		Binary:      name, // TODO: deprecated: remove this sometime

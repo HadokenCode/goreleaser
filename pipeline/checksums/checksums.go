@@ -38,7 +38,11 @@ func (Pipe) Run(ctx *context.Context) (err error) {
 		if err := file.Close(); err != nil {
 			log.WithError(err).Errorf("failed to close %s", file.Name())
 		}
-		ctx.AddArtifact(file.Name())
+		ctx.AddArtifact(context.Artifact{
+			Name: filename,
+			Path: file.Name(),
+			Type: context.Checksum,
+		})
 	}()
 	var g errgroup.Group
 	for _, artifact := range ctx.Artifacts {
@@ -58,13 +62,13 @@ func (Pipe) Default(ctx *context.Context) error {
 	return nil
 }
 
-func checksums(ctx *context.Context, file *os.File, name string) error {
-	log.WithField("file", name).Info("checksumming")
-	var artifact = filepath.Join(ctx.Config.Dist, name)
-	sha, err := checksum.SHA256(artifact)
+func checksums(ctx *context.Context, file *os.File, artifact context.Artifact) error {
+	log.WithField("file", artifact.Name).Info("checksumming")
+	var path = filepath.Join(ctx.Config.Dist, artifact.Path)
+	sha, err := checksum.SHA256(path)
 	if err != nil {
 		return err
 	}
-	_, err = file.WriteString(fmt.Sprintf("%v  %v\n", sha, name))
+	_, err = file.WriteString(fmt.Sprintf("%v  %v\n", sha, artifact.Name))
 	return err
 }

@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/apex/log"
 	"github.com/goreleaser/goreleaser/context"
@@ -70,22 +69,18 @@ func (Pipe) Run(ctx *context.Context) error {
 	}
 
 	var g errgroup.Group
-	for platform, groups := range ctx.Binaries {
-		if !strings.Contains(platform, "linux") {
-			log.WithField("platform", platform).Debug("skipped non-linux builds for snapcraft")
-			continue
-		}
-		arch := linux.Arch(platform)
-		for folder, binaries := range groups {
-			g.Go(func() error {
-				return create(ctx, folder, arch, binaries)
-			})
-		}
+	// TODO: implement a semaphore here as well
+	for folder, builds := range ctx.Builds.ByGoos("linux").GroupedByFolder() {
+		arch := linux.Arch(folder)
+		builds := builds
+		g.Go(func() error {
+			return create(ctx, folder, arch, builds)
+		})
 	}
 	return g.Wait()
 }
 
-func create(ctx *context.Context, folder, arch string, binaries []context.Binary) error {
+func create(ctx *context.Context, folder, arch string, builds context.Builds) error {
 	var log = log.WithField("arch", arch)
 	// prime is the directory that then will be compressed to make the .snap package.
 	var folderDir = filepath.Join(ctx.Config.Dist, folder)
@@ -114,21 +109,21 @@ func create(ctx *context.Context, folder, arch string, binaries []context.Binary
 		metadata.Name = ctx.Config.ProjectName
 	}
 
-	for _, binary := range binaries {
-		log.WithField("path", binary.Path).
-			WithField("name", binary.Name).
+	for _, build := range builds {
+		log.WithField("path", build.Path()).
+			WithField("name", build.Name).
 			Debug("passed binary to snapcraft")
 		appMetadata := AppMetadata{
-			Command: binary.Name,
+			Command: build.Name,
 		}
-		if configAppMetadata, ok := ctx.Config.Snapcraft.Apps[binary.Name]; ok {
+		if configAppMetadata, ok := ctx.Config.Snapcraft.Apps[build.Name]; ok {
 			appMetadata.Plugs = configAppMetadata.Plugs
 			appMetadata.Daemon = configAppMetadata.Daemon
 		}
-		metadata.Apps[binary.Name] = appMetadata
+		metadata.Apps[build.Name] = appMetadata
 
-		destBinaryPath := filepath.Join(primeDir, filepath.Base(binary.Path))
-		if err := os.Link(binary.Path, destBinaryPath); err != nil {
+		destBinaryPath := filepath.Join(primeDir, filepath.Base(build.Path()))
+		if err := os.Link(build.Path(), destBinaryPath); err != nil {
 			return err
 		}
 	}
@@ -147,6 +142,10 @@ func create(ctx *context.Context, folder, arch string, binaries []context.Binary
 	if out, err = cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to generate snap package: %s", string(out))
 	}
-	ctx.AddArtifact(snap)
+	ctx.AddArtifact(context.Artifact{
+		Type: context.Uploadable,
+		Name: folder + ".snap",
+		Path: snap,
+	})
 	return nil
 }

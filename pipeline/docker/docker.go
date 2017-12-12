@@ -66,21 +66,18 @@ func (Pipe) Default(ctx *context.Context) error {
 
 func doRun(ctx *context.Context) error {
 	for _, docker := range ctx.Config.Dockers {
-		var imagePlatform = docker.Goos + docker.Goarch + docker.Goarm
-		for platform, groups := range ctx.Binaries {
-			if platform != imagePlatform {
+		var builds = ctx.Builds.
+			ByGoos(docker.Goos).
+			ByGoarch(docker.Goarch).
+			ByGoarm(docker.Goarm)
+
+		for _, build := range builds {
+			if build.Name != docker.Binary {
 				continue
 			}
-			for folder, binaries := range groups {
-				for _, binary := range binaries {
-					if binary.Name != docker.Binary {
-						continue
-					}
-					var err = process(ctx, folder, docker, binary)
-					if err != nil && !pipeline.IsSkip(err) {
-						return err
-					}
-				}
+			var err = process(ctx, docker, build)
+			if err != nil && !pipeline.IsSkip(err) {
+				return err
 			}
 		}
 	}
@@ -105,7 +102,8 @@ func tagName(ctx *context.Context, docker config.Docker) (string, error) {
 	return out.String(), err
 }
 
-func process(ctx *context.Context, folder string, docker config.Docker, binary context.Binary) error {
+func process(ctx *context.Context, docker config.Docker, build context.Build) error {
+	var folder = build.Folder
 	var root = filepath.Join(ctx.Config.Dist, folder)
 	var dockerfile = filepath.Join(root, filepath.Base(docker.Dockerfile))
 	tag, err := tagName(ctx, docker)
@@ -146,14 +144,26 @@ func publish(ctx *context.Context, docker config.Docker, image, latest string) e
 	if err := dockerPush(image); err != nil {
 		return err
 	}
-	ctx.AddDocker(image)
+	ctx.AddArtifact(context.Artifact{
+		Type: context.DockerImage,
+		Name: image,
+		Path: image,
+	})
 	if !docker.Latest {
 		return nil
 	}
 	if err := dockerTag(image, latest); err != nil {
 		return err
 	}
-	return dockerPush(latest)
+	if err := dockerPush(latest); err != nil {
+		return err
+	}
+	ctx.AddArtifact(context.Artifact{
+		Type: context.DockerImage,
+		Name: latest,
+		Path: latest,
+	})
+	return nil
 }
 
 func dockerBuild(root, dockerfile, image string) error {

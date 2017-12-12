@@ -10,6 +10,7 @@ import (
 	ctx "context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -47,7 +48,7 @@ type Context struct {
 }
 
 func (builds Builds) GroupedByFolder() map[string]Builds {
-	var result map[string]Builds
+	result := map[string]Builds{}
 	for _, build := range builds {
 		if result[build.Folder] == nil {
 			result[build.Folder] = Builds{}
@@ -65,7 +66,41 @@ type Build struct {
 	Goarm  string
 }
 
+func (b Build) Path() string {
+	return filepath.Join(b.Folder, b.Name)
+}
+
 type Builds []Build
+
+func (builds Builds) ByGoos(goos string) Builds {
+	var result Builds
+	for _, build := range builds {
+		if build.Goos == goos {
+			result = append(result, build)
+		}
+	}
+	return result
+}
+
+func (builds Builds) ByGoarch(goarch string) Builds {
+	var result Builds
+	for _, build := range builds {
+		if build.Goarch == goarch {
+			result = append(result, build)
+		}
+	}
+	return result
+}
+
+func (builds Builds) ByGoarm(goarm string) Builds {
+	var result Builds
+	for _, build := range builds {
+		if build.Goarm == goarm {
+			result = append(result, build)
+		}
+	}
+	return result
+}
 
 type ArtifactType int
 
@@ -76,9 +111,16 @@ const (
 )
 
 type Artifact struct {
-	Name string
-	Path string
-	Type ArtifactType
+	Name   string
+	Path   string
+	Goos   string
+	Goarch string
+	Goarm  string
+	Type   ArtifactType
+}
+
+func (a Artifact) IsUploadable() bool {
+	return a.Type == Uploadable
 }
 
 func (a Artifact) String() string {
@@ -86,6 +128,46 @@ func (a Artifact) String() string {
 }
 
 type Artifacts []Artifact
+
+func (artifacts Artifacts) ByType(t ArtifactType) Artifacts {
+	var result Artifacts
+	for _, artifact := range artifacts {
+		if artifact.Type == t {
+			result = append(result, artifact)
+		}
+	}
+	return result
+}
+
+func (artifacts Artifacts) ByGoos(goos string) Artifacts {
+	var result Artifacts
+	for _, artifact := range artifacts {
+		if artifact.Goos == goos {
+			result = append(result, artifact)
+		}
+	}
+	return result
+}
+
+func (artifacts Artifacts) ByGoarch(goarch string) Artifacts {
+	var result Artifacts
+	for _, artifact := range artifacts {
+		if artifact.Goarch == goarch {
+			result = append(result, artifact)
+		}
+	}
+	return result
+}
+
+func (artifacts Artifacts) ByGoarm(goarm string) Artifacts {
+	var result Artifacts
+	for _, artifact := range artifacts {
+		if artifact.Goarm == goarm {
+			result = append(result, artifact)
+		}
+	}
+	return result
+}
 
 // AddArtifact adds a file to upload list
 func (ctx *Context) AddArtifact(artifact Artifact) {
